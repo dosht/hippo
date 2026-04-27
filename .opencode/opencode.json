@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "claude-team": {
+      "type": "local",
+      "command": [
+        "claude-team-mcp-server"
+      ],
+      "enabled": true
+    }
+  }
+}

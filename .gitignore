@@ -1,0 +1,45 @@
+# Bronze and silver are local-only (large, temporary, personal)
+bronze/
+silver/
+
+# Manifest holds pipeline state with personal session UUIDs/paths — local-only
+manifest.jsonl
+
+# QMD index is derived (rebuildable from gold entries)
+.qmd/
+.cache/
+*.sqlite
+
+# Reconcile pipeline artifacts (regenerated each run)
+reconcile-clusters.jsonl
+reconcile-proposals.jsonl
+
+# Claude Code per-session lock file
+.claude/scheduled_tasks.lock
+
+# Node modules (for any pipeline scripts)
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Gold entries are YOUR personal data — keep them out of the framework repo.
+# See README.md "Bring Your Own Gold" — set HIPPO_GOLD_DIR or symlink in.
+gold/entries/*
+!gold/entries/.gitkeep
+gold/_retired/
+gold/suggestions/
+
+# Sample entries (in gold/sample-entries/) ARE tracked — they show the schema.
+!gold/sample-entries/
+!gold/sample-entries/*.md

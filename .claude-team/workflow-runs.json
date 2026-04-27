@@ -1,0 +1,129 @@
+{
+  "run-a147e57a": {
+    "run_id": "run-a147e57a",
+    "workflow_name": "epic-development",
+    "status": "stopped",
+    "initial_context": {
+      "epic_id": "HIPPO-MVP"
+    },
+    "accumulated_context": {
+      "epic_id": "HIPPO-MVP",
+      "user_choice": "reject"
+    },
+    "step_states": {
+      "design-epic": {
+        "step_id": "design-epic",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-16T09:27:27.765180",
+        "error": null,
+        "retry_count": 0
+      },
+      "create-infrastructure": {
+        "step_id": "create-infrastructure",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-16T11:42:13.636712",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-epic-design": {
+        "step_id": "review-epic-design",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-16T19:10:32.740438",
+        "error": null,
+        "retry_count": 0
+      },
+      "approve-design": {
+        "step_id": "approve-design",
+        "status": "completed",
+        "result": "completed",
+        "context": {
+          "choice": "approve"
+        },
+        "started_at": null,
+        "completed_at": "2026-04-17T10:03:47.508456",
+        "error": null,
+        "retry_count": 0
+      },
+      "design-approved": {
+        "step_id": "design-approved",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-18T07:12:41.756755",
+        "error": null,
+        "retry_count": 0
+      },
+      "design-rejected": {
+        "step_id": "design-rejected",
+        "status": "ready",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "wave-loop": {
+        "step_id": "wave-loop",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-18T07:17:16.430257",
+        "error": "Failed to evaluate expression '{{{expression}}}': \"Key 'design-epic' not found in context\"",
+        "retry_count": 0
+      },
+      "sign-off": {
+        "step_id": "sign-off",
+        "status": "completed",
+        "result": "completed",
+        "context": {
+          "choice": "reject"
+        },
+        "started_at": null,
+        "completed_at": "2026-04-18T08:55:14.921813",
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-approved": {
+        "step_id": "complete-approved",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-rejected": {
+        "step_id": "complete-rejected",
+        "status": "ready",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      }
+    },
+    "current_steps": [
+      "design-epic"
+    ],
+    "started_at": "2026-04-16T08:42:04.023442",
+    "completed_at": "2026-04-18T08:55:53.799465",
+    "user_choice": "reject",
+    "step_outputs": {},
+    "generated_steps": {},
+    "loop_contexts": {}
+  }
+}

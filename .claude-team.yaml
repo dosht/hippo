@@ -1,0 +1,48 @@
+project:
+  id: hippo
+  name: Hippo
+  description: Experiential memory system for AI agents. Captures knowledge from coding
+    sessions automatically and makes it queryable across projects.
+  status: active
+  repo: dosht/hippo
+docs:
+  root: docs
+  types:
+    product: docs/product
+    epics: docs/product/epics
+    architecture: docs/architecture
+    decisions: docs/architecture/decisions
+    developer-guide: docs/developer-guide
+    playbooks: docs/playbooks
+    brainstorm: docs/brainstorm
+knowledge:
+  root: docs/knowledge
+  types:
+    lessons: docs/knowledge/lessons
+    patterns: docs/knowledge/patterns
+    decisions: docs/architecture/decisions
+workflows: {}
+agents: {}
+workflow:
+  story-states:
+  - draft
+  - ready
+  - in-progress
+  - review
+  - sign-off
+  - done
+  transitions:
+    draft:
+    - ready
+    ready:
+    - in-progress
+    in-progress:
+    - review
+    - ready
+    review:
+    - in-progress
+    - sign-off
+    sign-off:
+    - done
+    - review
+    done: []

@@ -1,0 +1,18 @@
+#!/bin/bash
+# Hippo post-merge hook
+# Runs qmd update && qmd embed after git pull if gold/entries/ changed.
+# Install via: scripts/install-hooks.sh
+# Depends on: HIPPO_HOME env var (defaults to ~/src/hippo)
+
+HIPPO_HOME="${HIPPO_HOME:-$HOME/src/hippo}"
+
+# Check whether any files under gold/entries/ changed in this merge.
+changed=$(git diff-tree --name-only ORIG_HEAD HEAD 2>/dev/null | grep "^gold/entries/" | head -1)
+
+if [ -z "$changed" ]; then
+    exit 0
+fi
+
+echo "[hippo] gold/entries/ changed, re-indexing QMD collection..."
+cd "$HIPPO_HOME" || { echo "[hippo] ERROR: cannot cd to HIPPO_HOME=$HIPPO_HOME"; exit 1; }
+qmd update && qmd embed

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mu.hippo.nightly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mu/src/hippo/scripts/nightly/run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mu/src/hippo</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>21</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mu/.local/bin:/Users/mu/.nvm/versions/node/v24.11.1/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mu</string>
+        <key>HIPPO_HOME</key>
+        <string>/Users/mu/src/hippo</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mu/.claude/hippo-nightly.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mu/.claude/hippo-nightly.stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
