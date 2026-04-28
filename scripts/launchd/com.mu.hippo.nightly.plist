@@ -8,18 +8,18 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/mu/src/hippo/scripts/nightly/run.sh</string>
+        <string>/Users/mu/src/hippo-public/scripts/nightly/run.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/mu/src/hippo</string>
+    <string>/Users/mu/src/hippo-public</string>
 
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>21</integer>
+        <integer>3</integer>
         <key>Minute</key>
-        <integer>30</integer>
+        <integer>0</integer>
     </dict>
 
     <key>EnvironmentVariables</key>
@@ -29,7 +29,7 @@
         <key>HOME</key>
         <string>/Users/mu</string>
         <key>HIPPO_HOME</key>
-        <string>/Users/mu/src/hippo</string>
+        <string>/Users/mu/src/hippo-public</string>
     </dict>
 
     <key>StandardOutPath</key>

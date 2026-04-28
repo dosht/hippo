@@ -265,6 +265,14 @@ def is_eligible(entry: dict) -> bool:
     return True
 
 
+class QuotaExhaustedError(RuntimeError):
+    """Raised when claude -p indicates quota/rate-limit exhaustion.
+
+    Treated as a graceful stop signal: the current run aborts without marking
+    the in-flight entry as failed, so the next scheduled run picks it up.
+    """
+
+
 def _is_rate_limit_error(returncode: int, stderr: str) -> bool:
     """Return True if the subprocess failure looks like a rate-limit error."""
     if returncode == 429:
@@ -306,60 +314,40 @@ def call_claude_compact(prompt_text: str, bronze_content: str) -> str:
     """
     combined = prompt_text + "\n\n---\n\n" + bronze_content
 
-    attempts = 0
-    last_error: Exception | None = None
+    try:
+        result = subprocess.run(
+            [
+                "claude",
+                "-p",
+                "--strict-mcp-config",
+                "--max-turns",
+                str(COMPACTION_MAX_TURNS),
+                "--model",
+                COMPACTION_MODEL,
+                combined,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to invoke claude: {exc}") from exc
 
-    while attempts <= BACKOFF_MAX_RETRIES:
-        if attempts > 0:
-            delay = BACKOFF_BASE_SECONDS * (2 ** (attempts - 1))
-            log.warning(
-                "Transient failure, retrying in %ds (attempt %d/%d): %s",
-                delay, attempts, BACKOFF_MAX_RETRIES, last_error,
-            )
-            time.sleep(delay)
+    if result.returncode == 0:
+        return result.stdout
 
-        try:
-            result = subprocess.run(
-                [
-                    "claude",
-                    "-p",
-                    "--strict-mcp-config",
-                    "--max-turns",
-                    str(COMPACTION_MAX_TURNS),
-                    "--model",
-                    COMPACTION_MODEL,
-                    combined,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"Failed to invoke claude: {exc}") from exc
-
-        if result.returncode == 0:
-            return result.stdout
-
-        stderr = result.stderr or ""
-        if _is_rate_limit_error(result.returncode, stderr):
-            last_error = RuntimeError(
-                f"Rate limit from claude (rc={result.returncode}): {stderr.strip()}"
-            )
-            attempts += 1
-            continue
-        if _is_transient_silent_failure(result.returncode, stderr):
-            last_error = RuntimeError(
-                f"Silent failure from claude (rc={result.returncode}, empty stderr)"
-            )
-            attempts += 1
-            continue
-
-        raise RuntimeError(
-            f"claude -p failed (rc={result.returncode}): {stderr.strip()}"
+    stderr = result.stderr or ""
+    if _is_rate_limit_error(result.returncode, stderr):
+        raise QuotaExhaustedError(
+            f"Rate limit from claude (rc={result.returncode}): {stderr.strip()}"
+        )
+    if _is_transient_silent_failure(result.returncode, stderr):
+        raise QuotaExhaustedError(
+            f"Silent failure from claude (rc={result.returncode}, empty stderr) — assuming quota exhausted"
         )
 
     raise RuntimeError(
-        f"Exhausted {BACKOFF_MAX_RETRIES} retries on transient failures. Last error: {last_error}"
+        f"claude -p failed (rc={result.returncode}): {stderr.strip()}"
     )
 
 
@@ -683,6 +671,12 @@ def main(argv: list[str] | None = None) -> int:
                 continue_playbook_path=continue_playbook_path,
                 dry_run=dry_run,
             )
+        except QuotaExhaustedError as exc:
+            log.warning(
+                "Quota exhausted on session %s: %s. Stopping run; entry remains bronze for next scheduled run.",
+                session_id, exc,
+            )
+            return 0
         except Exception as exc:  # noqa: BLE001
             log.error("Failed to compact session %s: %s", session_id, exc)
             errors += 1
