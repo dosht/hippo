@@ -81,24 +81,27 @@ This means the first session after initial setup is the baseline. All memory is 
 
 ---
 
-## 4. Quota-Aware Graceful Stop Pattern [QUEUED]
+## 4. Quota-Aware Graceful Stop Pattern
 
-The episode extractor calls `claude -p` once per session. Long nightly runs risk exhausting
-the Max subscription daily quota mid-run.
+Any pipeline script that calls `claude -p` runs the risk of exhausting the Max subscription
+daily quota mid-run.
 
-Pattern (to be implemented in `scripts/extract_episodes.py`):
-1. Catch `QuotaExhaustedError` (or detect rate-limit signature in `claude -p` stderr).
-2. Flush the manifest with the current state (partial run is fine; incomplete sessions remain
-   at status `bronze` and are picked up next night).
-3. Write a summary log entry: how many extracted, how many deferred.
+**Shared error class**: `scripts/errors.py` defines `QuotaExhaustedError` and the detection
+helpers `is_rate_limit_error` / `is_transient_silent_failure`. All pipeline scripts import
+from here. Do not define local copies.
+
+**Pattern** (implemented in `compact.py`, `extract.py`, `reconcile.py`; apply when building
+`scripts/extract_episodes.py` for v2):
+1. Catch `QuotaExhaustedError` before the generic exception handler in the per-session loop.
+2. Do not write `failed` to the manifest for the in-flight session. Leave status unchanged
+   (`silver` for extract, `gold-candidate` or `silver` for reconcile).
+3. Log a warning with how many sessions were processed and how many deferred.
 4. Exit with code 0. Do not retry. The next nightly run resumes automatically.
 
-**Key invariant**: a quota stop must never leave a trace store in a partially-written state
-for a single session. Trace writes for one session are atomic: all traces for a session are
-written together, then the manifest row is updated. If the process is killed mid-write, the
-manifest row stays `bronze` and the session is reprocessed next night (mtime check catches
-any partial bronze re-copy; the trace store can accumulate duplicate traces for that session
-until a de-dup pass runs).
+**Key invariant**: a quota stop must never leave a session in a partially-written state.
+Writes for one session are atomic: all output is written, then the manifest row is updated.
+If the process is killed mid-write, the manifest row stays at its prior status and the session
+is reprocessed next night.
 
 ---
 

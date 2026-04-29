@@ -35,6 +35,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.errors import QuotaExhaustedError, is_rate_limit_error, is_transient_silent_failure
 from scripts.manifest import read_manifest, update_manifest
 
 
@@ -319,6 +320,8 @@ def call_claude_extract(
     git_branch_val = metadata.get("git_branch")
     session_started_at_val = metadata.get("session_started_at")
 
+    thread_id_val = metadata.get("thread_id")
+
     meta_lines = [
         "Session metadata:",
         f"  session_id: {session_id}",
@@ -331,6 +334,8 @@ def call_claude_extract(
         meta_lines.append(f"  git_branch: {git_branch_val}")
     if session_started_at_val and session_started_at_val != "null":
         meta_lines.append(f"  session_started_at: {session_started_at_val}")
+    if thread_id_val and thread_id_val != "null":
+        meta_lines.append(f"  thread_id: {thread_id_val}")
 
     combined = (
         prompt
@@ -372,16 +377,14 @@ def call_claude_extract(
         if result.returncode == 0:
             break
         stderr = result.stderr or ""
-        is_rate_limit = result.returncode == 429 or "rate limit" in stderr.lower() or "429" in stderr.lower()
-        is_silent = result.returncode != 0 and stderr.strip() == ""
-        if is_rate_limit:
-            last_error = RuntimeError(
+        if is_rate_limit_error(result.returncode, stderr):
+            last_error = QuotaExhaustedError(
                 f"Rate limit from claude (rc={result.returncode}): {stderr.strip()}"
             )
             attempts += 1
             continue
-        if is_silent:
-            last_error = RuntimeError(
+        if is_transient_silent_failure(result.returncode, stderr):
+            last_error = QuotaExhaustedError(
                 f"Silent failure from claude (rc={result.returncode}, empty stderr)"
             )
             attempts += 1
@@ -390,11 +393,10 @@ def call_claude_extract(
         raise RuntimeError(
             f"claude -p failed (rc={result.returncode}): {stderr.strip()}"
         )
-    else:  # pragma: no cover — only hit when retries exhaust
-        raise RuntimeError(
-            f"Exhausted {BACKOFF_MAX_RETRIES} retries on transient failures. "
-            f"Last error: {last_error}"
-        )
+    else:
+        # Retries exhausted: raise the last QuotaExhaustedError so the caller
+        # recognises this as a quota stop rather than a session failure.
+        raise last_error  # type: ignore[misc]
 
     if result is None or result.returncode != 0:
         # Defensive: should be unreachable given the loop control flow above.
@@ -532,7 +534,7 @@ def validate_frontmatter(entry: dict) -> bool:
     return MODEL_OWNED_REQUIRED.issubset(entry.keys())
 
 
-def _apply_python_owned_fields(entry: dict, session_id: str, project: str | None = None) -> dict:
+def _apply_python_owned_fields(entry: dict, session_id: str, project: str | None = None, thread_id: str | None = None) -> dict:
     """Fill in the deterministic frontmatter fields Python owns.
 
     Mutates and returns ``entry``. Always overrides — even if the model emitted
@@ -568,6 +570,9 @@ def _apply_python_owned_fields(entry: dict, session_id: str, project: str | None
     entry["confidence"] = "medium"
     if not entry.get("supersedes"):
         entry["supersedes"] = []
+    # thread_id: Python-owned, carries the thread identity through to gold.
+    # Serializes as null when absent (pre-MVP-2 rows have no thread_id).
+    entry["thread_id"] = thread_id
     return entry
 
 
@@ -708,7 +713,12 @@ def extract_session(
 
             # Override Python-owned deterministic fields. Anything the model
             # wrote for these is discarded (prevents drift and date errors).
-            _apply_python_owned_fields(proposed, session_id, project=silver_meta.get("project"))
+            _apply_python_owned_fields(
+                proposed,
+                session_id,
+                project=silver_meta.get("project"),
+                thread_id=silver_meta.get("thread_id") or None,
+            )
 
             if is_duplicate(proposed):
                 log.info("Skipping duplicate: %s", proposed.get("id"))
@@ -837,6 +847,13 @@ def main(argv: list[str] | None = None) -> int:
                             "Could not propagate gold status to sibling %s: %s",
                             sibling.get("session_id"), upd_exc,
                         )
+        except QuotaExhaustedError as exc:
+            # Quota wall: stop the run gracefully. The session stays at its
+            # current status (silver) so the next scheduled run picks it up.
+            # Exit 0 so launchd does not flag the job as failed (consistent
+            # with compact.py line 679 and arc42 Section 8 Quota-Aware Stop).
+            log.warning("Quota wall hit at session %s: %s. Stopping run.", session_id, exc)
+            break
         except Exception as exc:  # noqa: BLE001
             log.error("Failed to extract session %s: %s", session_id, exc)
             errors += 1

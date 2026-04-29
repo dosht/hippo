@@ -846,3 +846,30 @@ class TestCompactSessionContinuation:
         part2 = next(e for e in m if e["session_id"] == "abc_part_02")
         assert part2["status"] == "silver"
         assert part2["silver_offset_bytes"] == prior_size
+
+
+# ---------------------------------------------------------------------------
+# MVP-2: thread_id in silver frontmatter (Issue 6) -- Task 7.6
+# ---------------------------------------------------------------------------
+
+class TestSilverFrontmatterThreadId:
+    """_silver_frontmatter includes thread_id when manifest row carries it."""
+
+    def test_thread_id_present_in_frontmatter(self):
+        entry = _make_entry(session_id="sess-thread")
+        entry["thread_id"] = "tid-abc123"
+        fm = _silver_frontmatter(entry)
+        assert "thread_id: tid-abc123" in fm
+
+    def test_thread_id_null_when_absent(self):
+        entry = _make_entry(session_id="sess-no-thread")
+        # No thread_id key in entry (pre-MVP-2 row)
+        entry.pop("thread_id", None)
+        fm = _silver_frontmatter(entry)
+        assert "thread_id: null" in fm
+
+    def test_thread_id_null_when_explicit_none(self):
+        entry = _make_entry(session_id="sess-none-thread")
+        entry["thread_id"] = None
+        fm = _silver_frontmatter(entry)
+        assert "thread_id: null" in fm

@@ -1361,3 +1361,74 @@ class TestModelOwnedConstants:
     def test_model_owned_includes_required_semantic_fields(self):
         assert {"id", "type", "topics", "projects", "agents",
                 "staleness_policy", "body"}.issubset(MODEL_OWNED_REQUIRED)
+
+
+# ---------------------------------------------------------------------------
+# MVP-2: Quota recovery (Issue 1) -- Task 7.1
+# ---------------------------------------------------------------------------
+
+from scripts.errors import QuotaExhaustedError
+
+
+class TestExtractQuotaRecovery:
+    """QuotaExhaustedError mid-run leaves no failed rows and exits 0."""
+
+    def test_quota_wall_leaves_no_failed_rows(self, silver_dir, gold_dir, prompt_path, tmp_manifest):
+        """When QuotaExhaustedError is raised during extraction, session status
+        stays at 'silver' (no failed row written) and main() returns 0."""
+        s1 = _write_silver(silver_dir, "s1")
+        s2 = _write_silver(silver_dir, "s2")
+        entries = [
+            _make_entry(session_id="s1", silver_path=str(s1)),
+            _make_entry(session_id="s2", silver_path=str(s2)),
+        ]
+        _write_manifest(tmp_manifest, entries)
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            if entry["session_id"] == "s1":
+                raise QuotaExhaustedError("quota hit")
+            return []
+
+        with patch("scripts.extract.extract_session", side_effect=fake_extract):
+            rc = main([
+                "--manifest", str(tmp_manifest),
+                "--gold-dir", str(gold_dir),
+                "--prompt", str(prompt_path),
+            ])
+
+        # Exit code 0: launchd does not flag job as failed.
+        assert rc == 0
+
+        # s1 must NOT be marked failed -- it stays silver.
+        manifested = read_manifest(str(tmp_manifest))
+        s1_entry = next(e for e in manifested if e["session_id"] == "s1")
+        assert s1_entry["status"] == "silver"
+        assert s1_entry.get("error") is None
+
+    def test_quota_wall_stops_processing_remaining_sessions(self, silver_dir, gold_dir, prompt_path, tmp_manifest):
+        """After a quota wall, the loop breaks and subsequent sessions are not processed."""
+        s1 = _write_silver(silver_dir, "s1")
+        s2 = _write_silver(silver_dir, "s2")
+        entries = [
+            _make_entry(session_id="s1", silver_path=str(s1)),
+            _make_entry(session_id="s2", silver_path=str(s2)),
+        ]
+        _write_manifest(tmp_manifest, entries)
+
+        processed = []
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            processed.append(entry["session_id"])
+            if entry["session_id"] == "s1":
+                raise QuotaExhaustedError("quota hit")
+            return []
+
+        with patch("scripts.extract.extract_session", side_effect=fake_extract):
+            main([
+                "--manifest", str(tmp_manifest),
+                "--gold-dir", str(gold_dir),
+                "--prompt", str(prompt_path),
+            ])
+
+        # Only s1 was attempted; s2 was not processed after the quota stop.
+        assert processed == ["s1"]

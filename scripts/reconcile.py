@@ -34,6 +34,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from scripts.errors import QuotaExhaustedError, is_rate_limit_error, is_transient_silent_failure
+
 
 EXTRACT_GIT_TAG = "M4/reconcile:"
 
@@ -136,6 +138,7 @@ def parse_entry(path: Path) -> dict:
     h1 = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
     title = h1.group(1).strip() if h1 else get_scalar("id")
 
+    thread_id = get_scalar("thread_id") or None
     return {
         "id": get_scalar("id") or path.stem,
         "title": title,
@@ -144,6 +147,7 @@ def parse_entry(path: Path) -> dict:
         "agents": get_list("agents"),
         "summary": get_scalar("summary"),
         "body": body.strip(),
+        "thread_id": thread_id,
     }
 
 
@@ -377,14 +381,18 @@ def call_claude_judge(prompt: str, dry_run: bool) -> str:
         if result.returncode == 0:
             return result.stdout or ""
         stderr = result.stderr or ""
-        is_rate_limit = result.returncode == 429 or "rate limit" in stderr.lower() or "429" in stderr.lower()
-        is_silent = result.returncode != 0 and stderr.strip() == ""
-        if is_rate_limit or is_silent:
-            last_error = RuntimeError(f"transient (rc={result.returncode}): {stderr.strip()!r}")
+        if is_rate_limit_error(result.returncode, stderr):
+            last_error = QuotaExhaustedError(f"Rate limit from claude (rc={result.returncode}): {stderr.strip()!r}")
+            attempts += 1
+            continue
+        if is_transient_silent_failure(result.returncode, stderr):
+            last_error = QuotaExhaustedError(f"Silent failure from claude (rc={result.returncode}, empty stderr)")
             attempts += 1
             continue
         raise RuntimeError(f"claude -p failed (rc={result.returncode}): {stderr.strip()}")
-    raise RuntimeError(f"Exhausted {BACKOFF_MAX_RETRIES} retries. Last error: {last_error}")
+    # Retries exhausted: raise as QuotaExhaustedError so the caller can
+    # distinguish quota stop from a hard failure.
+    raise last_error  # type: ignore[misc]
 
 
 def handle_subagent_clusters(subagent_proposals: list[dict], prompt_template: str,
@@ -432,7 +440,36 @@ def run_cluster(args: argparse.Namespace) -> int:
             score_map[(e["id"], nid)] = score
         log.info("  %s -> %d neighbors", e["id"], len(nbrs))
 
-    clusters = cluster(neighbor_map)
+    # Second pass: merge all entries sharing a thread_id into the same cluster,
+    # regardless of QMD similarity score. Uses the same DSU from the cluster()
+    # helper by re-running a fresh DSU that incorporates both QMD neighbors and
+    # thread groups.
+    dsu_combined = DSU()
+    # Seed with QMD-derived unions.
+    for new_id, neighbors in neighbor_map.items():
+        for nid, _ in neighbors:
+            dsu_combined.union(new_id, nid)
+        dsu_combined.find(new_id)  # ensure isolated entries appear
+
+    # Thread_id grouping: co-cluster all new entries that share a thread_id.
+    thread_groups: dict[str, list[str]] = {}
+    for e in new_entries:
+        tid = e.get("thread_id")
+        if tid:
+            thread_groups.setdefault(tid, []).append(e["id"])
+    for tid, members in thread_groups.items():
+        if len(members) > 1:
+            anchor = members[0]
+            for m in members[1:]:
+                dsu_combined.union(anchor, m)
+            log.info("  thread_id %s: co-clustered %s", tid, members)
+
+    from collections import defaultdict as _defaultdict
+    combined_groups: dict[str, set[str]] = _defaultdict(set)
+    for member in dsu_combined.parent:
+        combined_groups[dsu_combined.find(member)].add(member)
+    clusters = list(combined_groups.values())
+
     nontrivial = [c for c in clusters if len(c) > 1]
     log.info("Built %d clusters total (%d non-trivial).", len(clusters), len(nontrivial))
 
@@ -478,6 +515,12 @@ def run_judge(args: argparse.Namespace) -> int:
     log.info("Sending %d clusters to claude -p (~%d tokens)", len(clusters), estimate_tokens(full_prompt))
     try:
         proposals = parse_proposals(call_claude_judge(full_prompt, dry_run=False))
+    except QuotaExhaustedError as exc:
+        # Quota wall: stop the run gracefully. No proposal file written.
+        # Exit 0 so launchd does not flag the job as failed (consistent with
+        # compact.py line 679 and arc42 Section 8 Quota-Aware Graceful Stop).
+        log.warning("Quota wall hit during judge: %s. Stopping run.", exc)
+        return 0
     except (RuntimeError, ValueError) as exc:
         log.error("Judge call failed: %s", exc)
         return 1

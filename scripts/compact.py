@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.errors import QuotaExhaustedError, is_rate_limit_error, is_transient_silent_failure
 from scripts.manifest import read_manifest, update_manifest
 
 # ---------------------------------------------------------------------------
@@ -265,31 +266,11 @@ def is_eligible(entry: dict) -> bool:
     return True
 
 
-class QuotaExhaustedError(RuntimeError):
-    """Raised when claude -p indicates quota/rate-limit exhaustion.
-
-    Treated as a graceful stop signal: the current run aborts without marking
-    the in-flight entry as failed, so the next scheduled run picks it up.
-    """
-
-
-def _is_rate_limit_error(returncode: int, stderr: str) -> bool:
-    """Return True if the subprocess failure looks like a rate-limit error."""
-    if returncode == 429:
-        return True
-    lowered = stderr.lower()
-    return "429" in lowered or "rate limit" in lowered
-
-
-def _is_transient_silent_failure(returncode: int, stderr: str) -> bool:
-    """Return True if claude exited non-zero with no stderr (likely transient).
-
-    Observed in prior runs (e.g. agent-a56f9ab108f2c12ca): claude returns a
-    non-zero rc but writes nothing to stderr. Root cause is unclear but a
-    transient retry is the correct general response — if the underlying
-    issue is persistent the retry will exhaust and surface as failed.
-    """
-    return returncode != 0 and stderr.strip() == ""
+# QuotaExhaustedError, is_rate_limit_error, and is_transient_silent_failure
+# are imported from scripts.errors (single source of truth).
+# Local aliases keep call sites below unchanged.
+_is_rate_limit_error = is_rate_limit_error
+_is_transient_silent_failure = is_transient_silent_failure
 
 
 def call_claude_compact(prompt_text: str, bronze_content: str) -> str:
@@ -420,6 +401,7 @@ def _silver_frontmatter(entry: dict) -> str:
     cwd = entry.get("cwd")
     git_branch = entry.get("git_branch")
     session_started_at = entry.get("session_started_at")
+    thread_id = entry.get("thread_id")  # MVP-2: carries thread identity through pipeline
     lines = [
         "---",
         f"session_id: {entry.get('session_id', '')}",
@@ -433,6 +415,7 @@ def _silver_frontmatter(entry: dict) -> str:
         f"cwd: {cwd if cwd is not None else 'null'}",
         f"git_branch: {git_branch if git_branch is not None else 'null'}",
         f"session_started_at: {session_started_at if session_started_at is not None else 'null'}",
+        f"thread_id: {thread_id if thread_id is not None else 'null'}",
         "---",
         "",
     ]

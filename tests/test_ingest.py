@@ -1202,3 +1202,233 @@ def test_split_balanced_target_parts_matches_size(tmp_path):
     expected = (total_size + 250_000 - 1) // 250_000
     assert len(chunks) == expected, \
         f"expected {expected} parts for {total_size} bytes, got {len(chunks)}"
+
+
+# ---------------------------------------------------------------------------
+# MVP-2: Sidecar gate (Issue 2), project_id/thread_id (Issue 3), cutoff (Issue 5)
+# ---------------------------------------------------------------------------
+
+from scripts.ingest import load_sidecar_index, load_ingest_cutoff, DEFAULT_INGEST_FROM
+
+
+def _write_sidecar(path: Path, records: list[dict]) -> None:
+    """Write sidecar records as JSONL."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec) + "\n")
+
+
+def _minimal_sidecar_record(session_id: str, started_at: str = "2026-04-28T10:00:00+00:00",
+                              project_id: str = "abc123", thread_id: str = "tid999") -> dict:
+    return {
+        "session_id": session_id,
+        "started_at": started_at,
+        "project_id": project_id,
+        "branch": "main",
+        "thread_id": thread_id,
+        "cwd": "/tmp/project",
+        "hook_version": 1,
+    }
+
+
+class TestLoadSidecarIndex:
+    def test_absent_file_returns_empty(self, tmp_path):
+        idx = load_sidecar_index(tmp_path / "no_such.jsonl")
+        assert idx == {}
+
+    def test_single_record_indexed_by_session_id(self, tmp_path):
+        p = tmp_path / "sessions.jsonl"
+        rec = _minimal_sidecar_record("sess-aaa")
+        _write_sidecar(p, [rec])
+        idx = load_sidecar_index(p)
+        assert "sess-aaa" in idx
+        assert idx["sess-aaa"]["project_id"] == "abc123"
+
+    def test_last_write_wins_for_duplicate_session_id(self, tmp_path):
+        p = tmp_path / "sessions.jsonl"
+        _write_sidecar(p, [
+            _minimal_sidecar_record("sess-dup", project_id="first"),
+            _minimal_sidecar_record("sess-dup", project_id="second"),
+        ])
+        idx = load_sidecar_index(p)
+        assert idx["sess-dup"]["project_id"] == "second"
+
+
+class TestSidecarGate:
+    """Issue 2: ingest_session and ingest_subagent_session reject unsidecarred sessions."""
+
+    def test_no_sidecar_session_rejected(self, tmp_path):
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-no-sidecar"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index={},  # empty -- no entry for this session
+        )
+        assert result is False
+        # Not written to manifest
+        manifest_path = tmp_path / "manifest.jsonl"
+        assert not manifest_path.exists() or manifest_path.read_text().strip() == ""
+
+    def test_matching_sidecar_session_admitted(self, tmp_path):
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-with-sidecar"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        sidecar_record = _minimal_sidecar_record(session_id)
+        sidecar_index = {session_id: sidecar_record}
+
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index=sidecar_index,
+        )
+        assert result is True
+
+    def test_no_sidecar_index_bypasses_gate(self, tmp_path):
+        """Passing sidecar_index=None disables the gate (backward compat)."""
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-no-gate"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index=None,  # gate disabled
+        )
+        assert result is True
+
+
+class TestProjectIdAndThreadId:
+    """Issue 3: project_id and thread_id from sidecar propagate to manifest row."""
+
+    def test_project_id_and_thread_id_in_manifest(self, tmp_path):
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-proj-thread"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        sidecar_record = _minimal_sidecar_record(
+            session_id, project_id="proj-abc", thread_id="thread-xyz"
+        )
+        sidecar_index = {session_id: sidecar_record}
+        sidecar_p = tmp_path / "sessions.jsonl"
+        _write_sidecar(sidecar_p, [sidecar_record])
+
+        manifest_path = tmp_path / "manifest.jsonl"
+        ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=manifest_path,
+            manifest=[],
+            dry_run=False,
+            sidecar_index=sidecar_index,
+            sidecar_path=sidecar_p,
+        )
+
+        from scripts.manifest import read_manifest
+        entries = read_manifest(str(manifest_path))
+        assert len(entries) == 1
+        assert entries[0].get("project_id") == "proj-abc"
+        assert entries[0].get("thread_id") == "thread-xyz"
+        assert entries[0].get("sidecar_path") is not None
+
+
+class TestIngestCutoff:
+    """Issue 5: HIPPO_INGEST_FROM cutoff skips pre-cutoff sessions."""
+
+    def test_session_before_cutoff_skipped(self, tmp_path):
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-old"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        # started_at is 2026-04-27 -- before the 2026-04-28 default cutoff
+        sidecar_record = _minimal_sidecar_record(session_id, started_at="2026-04-27T10:00:00+00:00")
+        sidecar_index = {session_id: sidecar_record}
+
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index=sidecar_index,
+            ingest_cutoff="2026-04-28",
+        )
+        assert result is False
+
+    def test_session_on_cutoff_day_admitted(self, tmp_path):
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-cutoff-day"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        # started_at is 2026-04-28 -- on the cutoff day, should be admitted
+        sidecar_record = _minimal_sidecar_record(session_id, started_at="2026-04-28T00:00:00+00:00")
+        sidecar_index = {session_id: sidecar_record}
+
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index=sidecar_index,
+            ingest_cutoff="2026-04-28",
+        )
+        assert result is True
+
+    def test_unsidecarred_session_rejected_before_cutoff_check(self, tmp_path):
+        """Sessions with no sidecar must be rejected by the sidecar gate before
+        the cutoff logic is reached (Issue 2 gate runs first)."""
+        src_dir = tmp_path / "projects" / "-Users-mu"
+        session_id = "sess-no-sidecar-cutoff"
+        src_file = src_dir / f"{session_id}.jsonl"
+        _write_session(src_file, _minimal_records(session_id))
+
+        # Empty sidecar_index -- gate rejects before cutoff check
+        result = ingest_session(
+            jsonl_path=src_file,
+            bronze_dir=tmp_path / "bronze",
+            manifest_path=tmp_path / "manifest.jsonl",
+            manifest=[],
+            dry_run=False,
+            sidecar_index={},
+            ingest_cutoff="2026-04-28",
+        )
+        assert result is False
+
+
+class TestLoadIngestCutoff:
+    def test_default_when_no_config_and_no_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HIPPO_INGEST_FROM", raising=False)
+        cutoff = load_ingest_cutoff(config_path=tmp_path / "no_config")
+        assert cutoff == DEFAULT_INGEST_FROM
+
+    def test_env_var_overrides_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIPPO_INGEST_FROM", "2025-01-01")
+        cutoff = load_ingest_cutoff(config_path=tmp_path / "no_config")
+        assert cutoff == "2025-01-01"
+
+    def test_config_file_read(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HIPPO_INGEST_FROM", raising=False)
+        cfg = tmp_path / "config"
+        cfg.write_text("[hippo]\ningest_from = 2025-06-15\n")
+        cutoff = load_ingest_cutoff(config_path=cfg)
+        assert cutoff == "2025-06-15"

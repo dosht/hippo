@@ -63,6 +63,15 @@ Scheduled via: `scripts/launchd/com.mu.hippo.ingest-v2.plist` (daily at 03:00).
 
 ## Layer 2: Consolidation
 
+### Shared Error Module
+
+**Entry point**: `scripts/errors.py`
+**Status**: DONE
+
+Defines `QuotaExhaustedError` and the detection helpers `is_rate_limit_error` /
+`is_transient_silent_failure`. All pipeline scripts that call `claude -p` import from here.
+See Section 8.4 for the Quota-Aware Graceful Stop pattern.
+
 ### Episode Extractor [QUEUED]
 
 **Planned entry point**: `scripts/extract_episodes.py` (not yet implemented)

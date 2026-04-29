@@ -589,3 +589,168 @@ def test_run_apply_idempotent_on_empty_proposals(tmp_path):
         retired_dir=tmp_path / "retired", approve=None, approve_all=True, dry_run=False,
     )
     assert run_apply(args) == 0
+
+
+# ---------------------------------------------------------------------------
+# MVP-2: Quota recovery (Issue 1) -- Task 7.2
+# ---------------------------------------------------------------------------
+
+import textwrap
+from unittest.mock import patch, MagicMock
+from scripts.errors import QuotaExhaustedError
+from scripts.reconcile import run_judge, main as reconcile_main
+
+
+def _write_cluster_file(tmp_path: Path, clusters: list[dict]) -> Path:
+    p = tmp_path / "reconcile-clusters.jsonl"
+    with open(p, "w") as fh:
+        for c in clusters:
+            fh.write(json.dumps(c) + "\n")
+    return p
+
+
+def _write_prompt(tmp_path: Path) -> Path:
+    p = tmp_path / "reconcile.md"
+    p.write_text("# Reconcile prompt\n\nClassify clusters.\n")
+    return p
+
+
+def _write_gold_entry(gold_dir: Path, entry_id: str, thread_id: str | None = None) -> Path:
+    gold_dir.mkdir(parents=True, exist_ok=True)
+    tid_line = f"thread_id: {thread_id}" if thread_id else "thread_id: null"
+    p = gold_dir / f"{entry_id}.md"
+    p.write_text(
+        f"---\nid: {entry_id}\ntype: operational\ntopics: [test]\n"
+        f"projects: [myproject]\nagents: [developer]\nsummary: test\n"
+        f"staleness_policy: 90d\nsource_sessions: [s1]\ncreated: 2026-04-28\n"
+        f"last_validated: 2026-04-28\nlast_queried: null\nquery_count: 0\n"
+        f"confidence: medium\nsupersedes: []\n{tid_line}\n---\n\n# Test\n\nBody.\n"
+    )
+    return p
+
+
+class TestReconcileJudgeQuotaRecovery:
+    """Task 7.2: quota wall in judge exits 0 and does not write proposal file."""
+
+    def test_quota_wall_exits_zero(self, tmp_path):
+        clusters_path = _write_cluster_file(tmp_path, [
+            {"cluster_id": "c001", "size": 2, "members": ["a", "b"],
+             "trigger_entries": ["a"], "scores": {}},
+        ])
+        prompt_path = _write_prompt(tmp_path)
+        gold_dir = tmp_path / "gold"
+        _write_gold_entry(gold_dir, "a")
+        _write_gold_entry(gold_dir, "b")
+        proposals_path = tmp_path / "proposals.jsonl"
+
+        import argparse
+        args = argparse.Namespace(
+            prompt=prompt_path,
+            clusters=clusters_path,
+            gold_dir=gold_dir,
+            output=proposals_path,
+            dry_run=False,
+        )
+
+        with patch("scripts.reconcile.call_claude_judge", side_effect=QuotaExhaustedError("quota")):
+            rc = run_judge(args)
+
+        assert rc == 0
+        # No proposal file written.
+        assert not proposals_path.exists()
+
+    def test_quota_wall_does_not_write_proposals(self, tmp_path):
+        clusters_path = _write_cluster_file(tmp_path, [
+            {"cluster_id": "c001", "size": 2, "members": ["a", "b"],
+             "trigger_entries": ["a"], "scores": {}},
+        ])
+        prompt_path = _write_prompt(tmp_path)
+        gold_dir = tmp_path / "gold"
+        _write_gold_entry(gold_dir, "a")
+        _write_gold_entry(gold_dir, "b")
+        proposals_path = tmp_path / "proposals.jsonl"
+
+        import argparse
+        args = argparse.Namespace(
+            prompt=prompt_path,
+            clusters=clusters_path,
+            gold_dir=gold_dir,
+            output=proposals_path,
+            dry_run=False,
+        )
+
+        with patch("scripts.reconcile.call_claude_judge", side_effect=QuotaExhaustedError("quota")):
+            run_judge(args)
+
+        assert not proposals_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# MVP-2: Thread-id clustering (Issue 6) -- Task 7.7
+# ---------------------------------------------------------------------------
+
+class TestThreadIdClustering:
+    """Three sessions sharing the same thread_id produce one cluster."""
+
+    def test_three_sessions_same_thread_id_one_cluster(self, tmp_path):
+        """run_cluster produces a single cluster for three entries with the
+        same thread_id, regardless of QMD similarity scores."""
+        from scripts.reconcile import run_cluster
+        import argparse
+
+        gold_dir = tmp_path / "gold"
+        tid = "thread-abc123"
+        _write_gold_entry(gold_dir, "entry-a", thread_id=tid)
+        _write_gold_entry(gold_dir, "entry-b", thread_id=tid)
+        _write_gold_entry(gold_dir, "entry-c", thread_id=tid)
+
+        out_path = tmp_path / "clusters.jsonl"
+        args = argparse.Namespace(
+            full=True,
+            gold_dir=gold_dir,
+            out=out_path,
+            top_k=5,
+            threshold=0.5,
+            dry_run=False,
+        )
+
+        # QMD returns no neighbors for any entry (scores all below threshold).
+        with patch("scripts.reconcile.qmd_query", return_value=[]):
+            rc = run_cluster(args)
+
+        assert rc == 0
+        assert out_path.exists()
+        clusters = [json.loads(line) for line in out_path.read_text().splitlines() if line.strip()]
+        # All three entries should be in one cluster.
+        assert len(clusters) == 1
+        assert sorted(clusters[0]["members"]) == ["entry-a", "entry-b", "entry-c"]
+
+    def test_different_thread_ids_stay_separate(self, tmp_path):
+        """Entries with different thread_ids are not co-clustered by thread_id pass."""
+        from scripts.reconcile import run_cluster
+        import argparse
+
+        gold_dir = tmp_path / "gold"
+        _write_gold_entry(gold_dir, "entry-x", thread_id="thread-111")
+        _write_gold_entry(gold_dir, "entry-y", thread_id="thread-222")
+
+        out_path = tmp_path / "clusters.jsonl"
+        args = argparse.Namespace(
+            full=True,
+            gold_dir=gold_dir,
+            out=out_path,
+            top_k=5,
+            threshold=0.5,
+            dry_run=False,
+        )
+
+        with patch("scripts.reconcile.qmd_query", return_value=[]):
+            rc = run_cluster(args)
+
+        assert rc == 0
+        clusters = [json.loads(line) for line in out_path.read_text().splitlines() if line.strip()]
+        # Two separate singleton clusters.
+        assert len(clusters) == 2
+        member_sets = [frozenset(c["members"]) for c in clusters]
+        assert frozenset(["entry-x"]) in member_sets
+        assert frozenset(["entry-y"]) in member_sets

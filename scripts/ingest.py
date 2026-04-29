@@ -34,6 +34,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import configparser
+import os
+
 from scripts.manifest import append_manifest, find_entry, read_manifest
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,84 @@ HARNESS = "claude-code"
 # ---------------------------------------------------------------------------
 
 
+# Default sidecar path for ~/.hippo/sessions.jsonl
+DEFAULT_SIDECAR_PATH = Path.home() / ".hippo" / "sessions.jsonl"
+
+# Default hippo config location
+DEFAULT_HIPPO_CONFIG = Path.home() / ".hippo" / "config"
+
+# Default ingest cutoff date (YYYY-MM-DD). Sessions with started_at before
+# this date are permanently skipped at ingest time.
+DEFAULT_INGEST_FROM = "2026-04-28"
+
+
+def load_sidecar_index(sidecar_path: Path | None = None) -> dict:
+    """Load the sidecar records from ~/.hippo/sessions.jsonl.
+
+    Returns a dict keyed by session_id. Returns {} if file is absent.
+    The sidecar file is append-only; last-write-wins for duplicate session_ids.
+
+    Args:
+        sidecar_path: Path to sessions.jsonl. Defaults to DEFAULT_SIDECAR_PATH.
+
+    Returns:
+        Dict mapping session_id -> sidecar record dict.
+    """
+    path = sidecar_path if sidecar_path is not None else DEFAULT_SIDECAR_PATH
+    if not path.exists():
+        return {}
+    index: dict = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                sid = record.get("session_id")
+                if sid:
+                    index[sid] = record
+    except OSError as exc:
+        log.warning("Could not read sidecar %s: %s", path, exc)
+    return index
+
+
+def load_ingest_cutoff(config_path: Path | None = None) -> str:
+    """Load the HIPPO_INGEST_FROM cutoff date (YYYY-MM-DD).
+
+    Reads from ~/.hippo/config (INI [hippo] ingest_from = YYYY-MM-DD) first,
+    then falls back to the HIPPO_INGEST_FROM environment variable, then to
+    the compiled-in default (DEFAULT_INGEST_FROM = "2026-04-28").
+
+    The downstream comparison ``sidecar["started_at"][:10] >= cutoff`` is a
+    lexicographic string compare. This is correct for ISO8601 YYYY-MM-DD dates
+    and must NOT be replaced with a datetime comparison (timezone ambiguity).
+
+    Args:
+        config_path: Path to config file. Defaults to DEFAULT_HIPPO_CONFIG.
+
+    Returns:
+        Cutoff date string in YYYY-MM-DD format.
+    """
+    path = config_path if config_path is not None else DEFAULT_HIPPO_CONFIG
+    if path.exists():
+        cfg = configparser.ConfigParser()
+        try:
+            cfg.read(str(path), encoding="utf-8")
+            val = cfg.get("hippo", "ingest_from", fallback=None)
+            if val:
+                return val.strip()
+        except Exception:  # pragma: no cover
+            pass
+    env_val = os.environ.get("HIPPO_INGEST_FROM")
+    if env_val:
+        return env_val.strip()
+    return DEFAULT_INGEST_FROM
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for ingest.py."""
     parser = argparse.ArgumentParser(
@@ -113,6 +194,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MANIFEST,
         metavar="PATH",
         help=f"Path to manifest.jsonl. Default: {DEFAULT_MANIFEST}",
+    )
+    parser.add_argument(
+        "--sidecar",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to the sidecar sessions.jsonl produced by the SessionStart hook "
+            "(default: ~/.hippo/sessions.jsonl). When provided and the file exists, "
+            "the sidecar gate is enabled: sessions with no matching sidecar entry "
+            "are rejected. When not provided, the gate is disabled (backward compat)."
+        ),
     )
     return parser
 
@@ -781,6 +874,9 @@ def ingest_subagent_session(
     manifest_path: Path,
     manifest: list[dict],
     dry_run: bool,
+    sidecar_index: dict | None = None,
+    ingest_cutoff: str | None = None,
+    sidecar_path: Path | None = None,
 ) -> bool:
     """Copy a single subagent session to bronze/ and append a manifest entry.
 
@@ -822,6 +918,27 @@ def ingest_subagent_session(
     if find_entry(manifest, f"{session_id}_part_01") is not None:
         log.debug("Skipping subagent %s: already ingested as parts.", session_id)
         return False
+
+    # Issue 2: Sidecar gate -- reject sessions with no matching sidecar entry.
+    # For subagents the sidecar is keyed by the agent_id (JSONL stem).
+    if sidecar_index is not None:
+        sidecar_record = sidecar_index.get(session_id)
+        if sidecar_record is None:
+            log.info("no sidecar for subagent %s, skipping", session_id)
+            return False
+
+        # Issue 5: Cutoff check.
+        cutoff = ingest_cutoff if ingest_cutoff is not None else DEFAULT_INGEST_FROM
+        started_at = sidecar_record.get("started_at", "")
+        if started_at and started_at[:10] < cutoff:
+            log.debug("subagent %s started_at %s is before cutoff %s, skipping", session_id, started_at[:10], cutoff)
+            return False
+
+    # Issue 3: read project_id and thread_id from sidecar.
+    sidecar_record = (sidecar_index or {}).get(session_id)
+    sub_sidecar_project_id = sidecar_record.get("project_id") if sidecar_record else None
+    sub_sidecar_thread_id = sidecar_record.get("thread_id") if sidecar_record else None
+    resolved_sidecar_path = str(sidecar_path.resolve()) if sidecar_path else None
 
     # Read sibling .meta.json for agent type and task description.
     source_meta_path = jsonl_path.with_suffix("").with_suffix(".meta.json")
@@ -890,6 +1007,9 @@ def ingest_subagent_session(
                 "session_started_at": session_meta["session_started_at"],
                 "part_index": None,
                 "total_parts": None,
+                "project_id": sub_sidecar_project_id,
+                "sidecar_path": resolved_sidecar_path,
+                "thread_id": sub_sidecar_thread_id,
             }
             append_manifest(str(manifest_path), entry)
         return True
@@ -986,6 +1106,9 @@ def ingest_subagent_session(
         "session_started_at": session_meta["session_started_at"],
         "part_index": None,
         "total_parts": None,
+        "project_id": sub_sidecar_project_id,
+        "sidecar_path": resolved_sidecar_path,
+        "thread_id": sub_sidecar_thread_id,
     }
     append_manifest(str(manifest_path), entry)
 
@@ -1007,6 +1130,9 @@ def ingest_session(
     manifest_path: Path,
     manifest: list[dict],
     dry_run: bool,
+    sidecar_index: dict | None = None,
+    ingest_cutoff: str | None = None,
+    sidecar_path: Path | None = None,
 ) -> bool:
     """Copy a single session to bronze/ and append a manifest entry.
 
@@ -1042,6 +1168,27 @@ def ingest_session(
     if find_entry(manifest, f"{session_id}_part_01") is not None:
         log.debug("Skipping %s: already ingested as parts.", session_id)
         return False
+
+    # Issue 2: Sidecar gate -- reject sessions with no matching sidecar entry.
+    if sidecar_index is not None:
+        sidecar_record = sidecar_index.get(session_id)
+        if sidecar_record is None:
+            log.info("no sidecar for %s, skipping", session_id)
+            return False
+
+        # Issue 5: Cutoff check -- skip sessions that predate HIPPO_INGEST_FROM.
+        # Uses lexicographic ISO8601 comparison (see load_ingest_cutoff docstring).
+        cutoff = ingest_cutoff if ingest_cutoff is not None else DEFAULT_INGEST_FROM
+        started_at = sidecar_record.get("started_at", "")
+        if started_at and started_at[:10] < cutoff:
+            log.debug("session %s started_at %s is before cutoff %s, skipping", session_id, started_at[:10], cutoff)
+            return False
+
+    # Issue 3: read project_id and thread_id from sidecar.
+    sidecar_record = (sidecar_index or {}).get(session_id)
+    sidecar_project_id = sidecar_record.get("project_id") if sidecar_record else None
+    sidecar_thread_id = sidecar_record.get("thread_id") if sidecar_record else None
+    resolved_sidecar_path = str(sidecar_path.resolve()) if sidecar_path else None
 
     try:
         source_size = jsonl_path.stat().st_size
@@ -1093,6 +1240,9 @@ def ingest_session(
                 "session_started_at": session_meta["session_started_at"],
                 "part_index": None,
                 "total_parts": None,
+                "project_id": sidecar_project_id,
+                "sidecar_path": resolved_sidecar_path,
+                "thread_id": sidecar_thread_id,
             }
             append_manifest(str(manifest_path), entry)
         return True
@@ -1172,6 +1322,9 @@ def ingest_session(
         "session_started_at": session_meta["session_started_at"],
         "part_index": None,
         "total_parts": None,
+        "project_id": sidecar_project_id,
+        "sidecar_path": resolved_sidecar_path,
+        "thread_id": sidecar_thread_id,
     }
     append_manifest(str(manifest_path), entry)
 
@@ -1215,6 +1368,25 @@ def main(argv: list[str] | None = None) -> int:
     manifest = read_manifest(str(manifest_path))
     known_ids: set[str] = {e["session_id"] for e in manifest}
 
+    # Issue 2: Load sidecar index once at startup (append-only, safe to read once).
+    # Gate is only enabled when --sidecar is explicitly provided (opt-in for
+    # backward compatibility during the MVP-2 transition period). When not
+    # provided, sidecar_index=None disables the gate so pre-MVP-2 runs continue
+    # to ingest all sessions without a sidecar.
+    sidecar_p = getattr(args, "sidecar", None)
+    if sidecar_p is not None and sidecar_p.exists():
+        sidecar_index = load_sidecar_index(sidecar_p)
+        log.info("Loaded sidecar index: %d entries from %s", len(sidecar_index), sidecar_p)
+    else:
+        sidecar_index = None
+        if sidecar_p is not None:
+            log.info("Sidecar file not found at %s -- sidecar gate disabled", sidecar_p)
+        else:
+            log.info("--sidecar not provided -- sidecar gate disabled")
+
+    # Issue 5: Load ingest cutoff once.
+    ingest_cutoff = load_ingest_cutoff()
+
     # Scan all *.jsonl files one level deep in source_dir (each subdirectory
     # is a project hash directory containing session files).
     #
@@ -1254,6 +1426,9 @@ def main(argv: list[str] | None = None) -> int:
                     manifest_path=manifest_path,
                     manifest=manifest,
                     dry_run=dry_run,
+                    sidecar_index=sidecar_index,
+                    ingest_cutoff=ingest_cutoff,
+                    sidecar_path=sidecar_p if sidecar_index else None,
                 )
                 if result:
                     # Check whether this was a skipped-large case by inspecting
@@ -1304,6 +1479,9 @@ def main(argv: list[str] | None = None) -> int:
                         manifest_path=manifest_path,
                         manifest=manifest,
                         dry_run=dry_run,
+                        sidecar_index=sidecar_index,
+                        ingest_cutoff=ingest_cutoff,
+                        sidecar_path=sidecar_p if sidecar_index else None,
                     )
                     if result:
                         try:
