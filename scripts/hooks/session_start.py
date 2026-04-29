@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 HIPPO_HOME = Path(os.environ.get("HIPPO_HOME", os.path.expanduser("~/.hippo")))
@@ -101,7 +102,7 @@ def main() -> int:
 
     record = {
         "session_id": session_id,
-        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "started_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "cwd": cwd,
         "repo_root": repo_root,
         "project_id": project_id,

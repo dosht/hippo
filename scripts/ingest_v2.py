@@ -116,10 +116,16 @@ def parse_iso_date(s: str) -> datetime | None:
     if not s:
         return None
     try:
-        # Accept either YYYY-MM-DD or full ISO
         if len(s) == 10:
             return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        # Normalize forms unsupported by Python <3.11's fromisoformat:
+        # `Z` suffix and offsets without a colon (`+0300` -> `+03:00`).
+        normalized = s.replace("Z", "+00:00")
+        if len(normalized) >= 5:
+            tail = normalized[-5:]
+            if tail[0] in "+-" and tail[1:].isdigit():
+                normalized = normalized[:-5] + tail[:3] + ":" + tail[3:]
+        return datetime.fromisoformat(normalized)
     except Exception:
         return None
 
