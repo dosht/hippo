@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-HIPPO_HOME="${HIPPO_HOME:-$HOME/src/hippo}"
+HIPPO_HOME="${HIPPO_HOME:-$HOME/src/hippo-public}"
 LOG="${HIPPO_NIGHTLY_LOG:-$HOME/.claude/hippo-nightly.log}"
 
 cd "$HIPPO_HOME"
