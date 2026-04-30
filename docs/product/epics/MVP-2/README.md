@@ -46,6 +46,8 @@ within the existing architecture.
 | [MVP-2-01](MVP-2-01.md) | MVP-1 Bug Fixes (quota recovery, sidecar gate, project identity, history flood, thread consolidation) | ready | L | - |
 | [MVP-2-02](MVP-2-02.md) | Optimization Phase 1 (per-session pipeline loop, prompt caching) | ready | M | MVP-2-01 |
 | [MVP-2-03](MVP-2-03.md) | Optimization Phase 2 (model routing, incremental reconcile, eligibility filter decision) | ready | M | MVP-2-02 |
+| [MVP-2-04](MVP-2-04.md) | Speed up hippo-remember skill (latency research and benchmarking) | draft | M | - |
+| [MVP-2-05](MVP-2-05.md) | Make hippo-remember invoked automatically by agents | draft | M | MVP-2-04 |
 
 ## Technical Notes
 
