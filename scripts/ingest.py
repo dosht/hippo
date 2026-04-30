@@ -55,8 +55,11 @@ log = logging.getLogger("ingest")
 # Constants (tune in implementation, do not change schema fields)
 # ---------------------------------------------------------------------------
 
-# Sessions exceeding this byte count are marked skipped-large and not copied.
-LARGE_SESSION_BYTES_THRESHOLD = 10_000_000
+# Sessions exceeding this byte count are marked skipped-large (runaway / corrupt
+# guard). Chunker handles everything below this. Was 10 MB historically; raised
+# because the chunker can split arbitrarily large sessions cleanly and there is
+# no reason to skip a real session under 1 GB.
+LARGE_SESSION_BYTES_THRESHOLD = 1_000_000_000
 
 # Sessions exceeding this byte count are split into parts at user-turn
 # boundaries (see _split_jsonl_user_aligned). Soft target leaves headroom for

@@ -35,7 +35,7 @@ run_stage() {
   fi
 }
 
-run_stage "ingest"             python -m scripts.ingest
+run_stage "ingest"             python -m scripts.ingest --sidecar "$HOME/.hippo/sessions.jsonl"
 run_stage "compact"            python -m scripts.compact
 run_stage "extract"            python -m scripts.extract
 run_stage "reconcile cluster"  python -m scripts.reconcile cluster --full
