@@ -61,8 +61,8 @@ export HIPPO_RETIRED_DIR=~/Documents/hippo-data/gold/_retired
 Or use symlinks if you prefer (no env var needed):
 
 ```bash
-ln -s ~/Documents/hippo-data/gold/entries  ~/src/hippo/gold/entries
-ln -s ~/Documents/hippo-data/gold/_retired ~/src/hippo/gold/_retired
+ln -s ~/Documents/hippo-data/gold/entries  ~/src/hippo-public/gold/entries
+ln -s ~/Documents/hippo-data/gold/_retired ~/src/hippo-public/gold/_retired
 ```
 
 If neither is set, Hippo defaults to `gold/entries/` inside this repo — fine for trying it out, but you should set `HIPPO_GOLD_DIR` before running the pipeline against your own sessions.
@@ -76,21 +76,33 @@ Sample entries demonstrating the schema live in [`gold/sample-entries/`](gold/sa
 npm install -g @tobilu/qmd
 pip install -e .                                 # or just run via `python -m`
 
-# 2. Clone
-git clone https://github.com/<you>/hippo ~/src/hippo
-cd ~/src/hippo
+# 2. Clone (path must match HIPPO_HOME default in scripts/nightly/run.sh,
+#    or override with: export HIPPO_HOME=/your/path)
+git clone https://github.com/<you>/hippo-public ~/src/hippo-public
+cd ~/src/hippo-public
 
 # 3. Point Hippo at where you want to keep your gold (or skip — defaults to gold/entries/)
 export HIPPO_GOLD_DIR=~/Documents/hippo-data/gold/entries
-mkdir -p "$HIPPO_GOLD_DIR"
+mkdir -p "$HIPPO_GOLD_DIR" gold/entries
 
 # 4. Register the QMD collection (run once)
 ./scripts/qmd-setup.sh
 
 # 5. Install the remember skill globally
-ln -s ~/src/hippo/.claude/skills/hippo-remember ~/.claude/skills/hippo-remember
+ln -s ~/src/hippo-public/.claude/skills/hippo-remember ~/.claude/skills/hippo-remember
 
-# 6. Schedule nightly pipeline (macOS)
+# 6. Register the SessionStart hook (required — writes sidecar metadata to
+#    ~/.hippo/sessions.jsonl on every Claude Code session start; ingest gates
+#    on this file, so without it no sessions are admitted to the pipeline).
+#    Add to ~/.claude/settings.json under hooks.SessionStart:
+#      { "command": "python3 /Users/<you>/src/hippo-public/scripts/hooks/session_start.py" }
+mkdir -p ~/.hippo
+
+# 7. Optional: set the ingest cutoff date. Sessions started before this date
+#    are skipped at ingest. Defaults to 2026-04-28 if unset.
+export HIPPO_INGEST_FROM=2026-04-28
+
+# 8. Schedule nightly pipeline (macOS)
 ./scripts/launchd/install.sh                     # 21:30 first attempt + 23:30 retry
 ```
 

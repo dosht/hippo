@@ -1,9 +1,19 @@
-# Bronze and silver are local-only (large, temporary, personal)
+# Bronze and silver are local-only (large, temporary, personal).
+# Both forms (real dir + BYOG symlink) are ignored.
 bronze/
+bronze
 silver/
+silver
 
 # Manifest holds pipeline state with personal session UUIDs/paths — local-only
 manifest.jsonl
+manifest.jsonl.bak*
+manifest.archive.jsonl
+
+# Local pipeline runtime artifacts
+logs/
+extracted_entries.txt
+sessions.jsonl
 
 # QMD index is derived (rebuildable from gold entries)
 .qmd/
@@ -36,8 +46,9 @@ Thumbs.db
 # Gold entries are YOUR personal data — keep them out of the framework repo.
 # See README.md "Bring Your Own Gold" — set HIPPO_GOLD_DIR or symlink in.
 gold/entries/*
-!gold/entries/.gitkeep
+gold/entries
 gold/_retired/
+gold/_retired
 gold/suggestions/
 
 # Sample entries (in gold/sample-entries/) ARE tracked — they show the schema.

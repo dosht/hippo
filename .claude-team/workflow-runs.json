@@ -125,5 +125,372 @@
     "step_outputs": {},
     "generated_steps": {},
     "loop_contexts": {}
+  },
+  "run-bd9049b6": {
+    "run_id": "run-bd9049b6",
+    "workflow_name": "development",
+    "status": "stopped",
+    "initial_context": {
+      "story_id": "MVP-2-01"
+    },
+    "accumulated_context": {
+      "story_id": "MVP-2-01"
+    },
+    "step_states": {
+      "create-plan": {
+        "step_id": "create-plan",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T15:51:20.007784",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-plan-tech-lead": {
+        "step_id": "review-plan-tech-lead",
+        "status": "rejected",
+        "result": "rejected",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:40:22.355747",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-plan-architect": {
+        "step_id": "review-plan-architect",
+        "status": "rejected",
+        "result": "rejected",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:40:22.941272",
+        "error": null,
+        "retry_count": 0
+      },
+      "plan-approved": {
+        "step_id": "plan-approved",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "implement": {
+        "step_id": "implement",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "run-tests": {
+        "step_id": "run-tests",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "review-tester": {
+        "step_id": "review-tester",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "review-tech-lead": {
+        "step_id": "review-tech-lead",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "review-architect": {
+        "step_id": "review-architect",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "review-approved": {
+        "step_id": "review-approved",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "update-docs": {
+        "step_id": "update-docs",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "sign-off": {
+        "step_id": "sign-off",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-approved": {
+        "step_id": "complete-approved",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-explain": {
+        "step_id": "complete-explain",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-showcase": {
+        "step_id": "complete-showcase",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-reject": {
+        "step_id": "complete-reject",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      }
+    },
+    "current_steps": [
+      "create-plan"
+    ],
+    "started_at": "2026-04-29T15:49:19.674701",
+    "completed_at": null,
+    "user_choice": null,
+    "step_outputs": {},
+    "generated_steps": {},
+    "loop_contexts": {}
+  },
+  "run-65ad7810": {
+    "run_id": "run-65ad7810",
+    "workflow_name": "development",
+    "status": "completed",
+    "initial_context": {
+      "story_id": "MVP-2-01"
+    },
+    "accumulated_context": {
+      "story_id": "MVP-2-01",
+      "user_choice": "approve"
+    },
+    "step_states": {
+      "create-plan": {
+        "step_id": "create-plan",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:44:38.274917",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-plan-tech-lead": {
+        "step_id": "review-plan-tech-lead",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:45:58.780121",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-plan-architect": {
+        "step_id": "review-plan-architect",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:45:59.418404",
+        "error": null,
+        "retry_count": 0
+      },
+      "plan-approved": {
+        "step_id": "plan-approved",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T16:58:22.287938",
+        "error": null,
+        "retry_count": 0
+      },
+      "implement": {
+        "step_id": "implement",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:29:30.338881",
+        "error": null,
+        "retry_count": 0
+      },
+      "run-tests": {
+        "step_id": "run-tests",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:30:16.940057",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-tester": {
+        "step_id": "review-tester",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:34:23.784055",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-tech-lead": {
+        "step_id": "review-tech-lead",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:34:24.864585",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-architect": {
+        "step_id": "review-architect",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:34:25.417465",
+        "error": null,
+        "retry_count": 0
+      },
+      "review-approved": {
+        "step_id": "review-approved",
+        "status": "completed",
+        "result": "approved",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:34:31.069959",
+        "error": null,
+        "retry_count": 0
+      },
+      "update-docs": {
+        "step_id": "update-docs",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:36:19.972415",
+        "error": null,
+        "retry_count": 0
+      },
+      "sign-off": {
+        "step_id": "sign-off",
+        "status": "completed",
+        "result": "completed",
+        "context": {
+          "choice": "approve"
+        },
+        "started_at": null,
+        "completed_at": "2026-04-29T17:51:19.219820",
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-approved": {
+        "step_id": "complete-approved",
+        "status": "completed",
+        "result": "completed",
+        "context": {},
+        "started_at": null,
+        "completed_at": "2026-04-29T17:51:24.012575",
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-explain": {
+        "step_id": "complete-explain",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-showcase": {
+        "step_id": "complete-showcase",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      },
+      "complete-reject": {
+        "step_id": "complete-reject",
+        "status": "pending",
+        "result": null,
+        "context": {},
+        "started_at": null,
+        "completed_at": null,
+        "error": null,
+        "retry_count": 0
+      }
+    },
+    "current_steps": [
+      "create-plan"
+    ],
+    "started_at": "2026-04-29T16:43:57.520949",
+    "completed_at": "2026-04-29T17:51:26.706571",
+    "user_choice": "approve",
+    "step_outputs": {},
+    "generated_steps": {},
+    "loop_contexts": {}
   }
 }
