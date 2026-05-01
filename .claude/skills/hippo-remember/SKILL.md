@@ -7,48 +7,30 @@ description: "Query the Hippo experiential memory system when you need operation
 
 Hippo is an experiential memory system that captures knowledge from past AI coding sessions automatically. It is queryable from any project.
 
-## Architecture (do not bypass)
-
-You delegate to a **dedicated memory subagent** that runs in its own context window. The subagent does the qmd search, reads the matching gold entries, and returns a concise synthesized answer (~200 words). You do **not** run qmd yourself, do **not** read gold entry files yourself — that pollutes your context with every query. Let the subagent's context absorb the search noise.
-
-This is the load-bearing design choice (see `docs/brainstorm/session-summary.md` and the **ERL** finding "LLM-based retrieval outperforms embedding-only"): parent stays clean, subagent does the retrieval and synthesis.
-
 ## How to Query
 
-Spawn the memory subagent via `claude -p`, **launched from `~/src/hippo`** (or `$HIPPO_HOME` if set) so it has the gold/ directory and qmd config in its working tree:
+Run the wrapper script with the user's question as a single argument:
 
 ```bash
-HIPPO_DIR="${HIPPO_HOME:-$HOME/src/hippo}"
-(cd "$HIPPO_DIR" && claude -p "{user's question, verbatim}" \
-  --append-system-prompt "$(cat <<'PROMPT'
-You are the Hippo memory retrieval subagent. Your only job: search Hippo gold entries and return a concise, grounded answer.
-
-Procedure:
-1. Run: qmd query "{the question, possibly clarified}" --collection hippo --json -n 5
-2. From results, take entries with score >= 0.5. Read the top 1-3 markdown files at gold/entries/<entry-id>.md (use the file basename from the qmd `file` field). Snippets alone are not enough.
-3. If the user is clearly working in a specific project (cwd context, project name in question), prefer entries whose frontmatter `projects:` includes that project or `[all]`. Don't be strict — cross-project knowledge often applies.
-4. Synthesize a concise answer (under 200 words) using ONLY information from those entry files. Inline the concrete details (paths, commands, ports, error messages) — research shows agents ignore abstract summaries but follow concrete details.
-5. End your answer with one line each:
-   - Source: <entry-id>[, <entry-id>]
-   - Confidence: <high|medium|low> from frontmatter
-   - Last validated: <YYYY-MM-DD> from frontmatter
-   - Stale warning: only if last_validated is older than the entry's staleness_policy
-
-If no result above 0.5 or all results are clearly off-topic, reply exactly: "No relevant entries found in Hippo memory." Do not invent answers. Do not fall back to general knowledge.
-
-Rules:
-- Never speculate beyond gold entry content.
-- Do not spawn further sub-claude calls. Run qmd and Read directly.
-- Do not cd. Use absolute paths if needed.
-PROMPT
-)" \
-  --model haiku \
-  --max-turns 5)
+~/.claude/skills/hippo-remember/bin/hippo-remember "<the user's question, verbatim>"
 ```
 
-Pass the user's question verbatim where shown. Add light clarification if it improves search (e.g. expand "auth" to "authentication" if the question is otherwise ambiguous).
+Surface stdout to the user as the answer. That is the entire interface.
 
-After the subagent returns, surface its answer to the user. Do not re-do the search yourself, do not second-guess the answer unless it is clearly wrong (e.g. cites a tool the user has never used).
+## Hard Rules — Do Not Bypass
+
+The script encapsulates a memory retrieval subagent that runs in its own context window, searches the gold corpus, and synthesizes a concise answer. You do **not** need to know how it works internally, and you **must not** reproduce its work.
+
+If the script exits non-zero, errors, is denied permission, or is otherwise unavailable:
+
+1. Surface the script's stderr to the user verbatim.
+2. **STOP.**
+3. Do **not** run `qmd` directly.
+4. Do **not** read any files under `gold/entries/` or `$HIPPO_HOME`.
+5. Do **not** `cd` into the Hippo project directory.
+6. Do **not** invent a fallback retrieval procedure of any kind.
+
+These fallbacks defeat the entire point of the abstraction: keeping the parent agent's context clean of search-result noise, gold-entry text, and implementation details. A failed query returning honestly to the user is correct behavior. An "improvised" query that pollutes the parent's context is a bug.
 
 ## When to Use
 
