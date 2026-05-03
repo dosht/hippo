@@ -7,11 +7,11 @@ knowledge entries by calling:
   claude -p --model claude-sonnet-4-5 --max-turns 1
 
 The extraction prompt is loaded from scripts/prompts/extract.md. Before
-writing each proposed entry, a duplicate check is performed via:
+writing each proposed entry, a duplicate check is performed by exact id
+collision only: if ``{id}.md`` already exists in gold_dir, the entry is
+skipped. Semantic deduplication belongs in the reconcile cold path
+(scripts/reconcile.py), which has full entry bodies and corpus-wide context.
 
-  qmd query "{proposed id and topics}" --collection hippo --json -n 3
-
-Entries with similarity score above DUPLICATE_THRESHOLD (0.85) are skipped.
 After all entries for a run are written, `qmd update && qmd embed` is called
 once -- NOT per entry.
 
@@ -19,6 +19,7 @@ Usage:
   python scripts/extract.py [--dry-run] [--manifest PATH]
                             [--gold-dir DIR] [--prompt PATH]
                             [--limit N] [--session SESSION_ID]
+                            [--recover-empty-gold]
 
 Wave 3b / Story S9. Depends on S8 (compact.py) and S2 (QMD collection).
 """
@@ -52,15 +53,8 @@ EXTRACTION_MAX_TURNS = 1
 BACKOFF_BASE_SECONDS = 2
 BACKOFF_MAX_RETRIES = 3
 
-# QMD similarity threshold above which a proposed entry is treated as a duplicate.
-# Do NOT change without updating docs/product/epics/HIPPO-MVP/design.md.
-DUPLICATE_THRESHOLD = 0.85
-
 # QMD collection name. Must match the name used in S2 and the git post-merge hook (S3).
 QMD_COLLECTION = "hippo"
-
-# Number of QMD results to retrieve for duplicate checking.
-QMD_DUPLICATE_CHECK_N = 3
 
 # Default confidence for auto-extracted entries (per design spec).
 DEFAULT_CONFIDENCE = "medium"
@@ -99,7 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Process silver summaries to gold entries using claude -p. "
             "Skips sessions already at status gold, skipped-large, or failed. "
-            "Runs duplicate detection via qmd query before writing each entry."
+            "Duplicate detection uses exact id collision only (no qmd/semantic check). "
+            "Use --recover-empty-gold to re-process stuck gold sessions with empty gold_paths."
         ),
     )
     parser.add_argument(
@@ -140,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help="Process at most N sessions (useful for validation runs).",
+    )
+    parser.add_argument(
+        "--recover-empty-gold",
+        action="store_true",
+        help=(
+            "In addition to silver sessions, also re-process gold-status sessions "
+            "whose gold_paths is empty. Use this to recover from a false-positive "
+            "duplicate check that silently discarded valid entries."
+        ),
     )
     return parser
 
@@ -425,65 +429,39 @@ def call_claude_extract(
     return entries
 
 
-def is_duplicate(proposed_entry: dict) -> bool:
-    """Check if a proposed entry is a near-duplicate of an existing gold entry.
+def is_duplicate(proposed_entry: dict, gold_dir: Path) -> bool:
+    """Check if a proposed entry already exists in the gold directory by exact id collision.
 
-    Runs:
-      qmd query "{proposed id and topics}" --collection hippo --json -n 3
-
-    Returns True if any result has similarity score >= DUPLICATE_THRESHOLD.
+    Semantic deduplication belongs in the reconcile cold path (scripts/reconcile.py),
+    which has full entry bodies and corpus-wide context. Using semantic similarity at
+    extract time with a thin topic-only query causes false positives as the corpus grows.
 
     Args:
-        proposed_entry: Dict with at least 'id' and 'topics' fields.
+        proposed_entry: Dict with at least an 'id' field.
+        gold_dir: Directory containing existing gold entry files.
 
     Returns:
-        True if the entry should be skipped (duplicate detected).
+        True if a file named ``{id}.md`` already exists in gold_dir (exact collision).
     """
     entry_id = proposed_entry.get("id", "")
-    topics = proposed_entry.get("topics", [])
-    if isinstance(topics, list):
-        topics_str = " ".join(topics)
-    else:
-        topics_str = str(topics)
+    return (gold_dir / f"{entry_id}.md").exists()
 
-    query = f"{entry_id} {topics_str}".strip()
 
-    result = subprocess.run(
-        [
-            "qmd",
-            "query",
-            query,
-            "--collection",
-            QMD_COLLECTION,
-            "--json",
-            "-n",
-            str(QMD_DUPLICATE_CHECK_N),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def is_recoverable(entry: dict) -> bool:
+    """Return True if a manifest entry is a stuck gold entry that should be re-extracted.
 
-    if result.returncode != 0 or not result.stdout.strip():
-        # Cannot check; proceed (assume not duplicate)
-        return False
+    Stuck entries have status "gold" but gold_paths is empty, meaning the model
+    extracted valid entries but they were silently discarded (e.g. by a false-positive
+    duplicate check). Re-running extract on these entries will produce non-empty
+    gold_paths if the entry's id does not collide with an existing file.
 
-    try:
-        results = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        log.warning("Failed to parse qmd JSON output for duplicate check of '%s'", entry_id)
-        return False
+    Args:
+        entry: A manifest entry dict.
 
-    if not isinstance(results, list):
-        return False
-
-    for item in results:
-        if isinstance(item, dict):
-            score = item.get("score")
-            if score is not None and score >= DUPLICATE_THRESHOLD:
-                return True
-
-    return False
+    Returns:
+        True if status is "gold" and gold_paths is an empty list.
+    """
+    return entry.get("status") == "gold" and entry.get("gold_paths") == []
 
 
 # Frontmatter ownership split:
@@ -620,7 +598,13 @@ def write_gold_entry(entry: dict, gold_dir: Path, dry_run: bool) -> Path:
         return output_path.resolve()
 
     gold_dir.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(file_content, encoding="utf-8")
+    tmp_path = output_path.with_suffix(".tmp")
+    try:
+        tmp_path.write_text(file_content, encoding="utf-8")
+        os.replace(tmp_path, output_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     log.info("Wrote gold entry: %s", output_path)
     return output_path.resolve()
 
@@ -720,8 +704,8 @@ def extract_session(
                 thread_id=silver_meta.get("thread_id") or None,
             )
 
-            if is_duplicate(proposed):
-                log.info("Skipping duplicate: %s", proposed.get("id"))
+            if is_duplicate(proposed, gold_dir):
+                log.info("Skipping duplicate (exact id collision): %s", proposed.get("id"))
                 continue
 
             written_path = write_gold_entry(proposed, gold_dir, dry_run)
@@ -761,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run: bool = args.dry_run
     session_filter: str | None = args.session
     limit: int | None = args.limit
+    recover_empty_gold: bool = args.recover_empty_gold
 
     prompt = load_prompt(prompt_path)
 
@@ -772,7 +757,10 @@ def main(argv: list[str] | None = None) -> int:
             log.error("No manifest entry found for session_id=%s", session_filter)
             return 1
 
-    eligible = [e for e in entries if is_eligible(e)]
+    if recover_empty_gold:
+        eligible = [e for e in entries if is_eligible(e) or is_recoverable(e)]
+    else:
+        eligible = [e for e in entries if is_eligible(e)]
 
     if not eligible:
         log.info("No eligible silver sessions to extract.")
@@ -884,6 +872,31 @@ def main(argv: list[str] | None = None) -> int:
         errors,
         dry_run,
     )
+
+    # Monitoring: surface gold-status sessions with empty gold_paths in the last 24h.
+    # This class of silent failure went undetected for 4 days in the Apr 2026 regression
+    # (MVP-2-06). A WARNING here ensures it cannot go undetected for more than one run.
+    if not dry_run:
+        from datetime import timedelta
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+        all_entries = read_manifest(str(manifest_path))
+        stuck_count = 0
+        for e in all_entries:
+            if e.get("status") == "gold" and e.get("gold_paths") == []:
+                extracted_at_raw = e.get("extracted_at")
+                if extracted_at_raw:
+                    try:
+                        extracted_at = datetime.fromisoformat(extracted_at_raw)
+                        if extracted_at > cutoff:
+                            stuck_count += 1
+                    except ValueError:
+                        pass
+        if stuck_count > 0:
+            log.warning(
+                "%d gold-status session(s) have empty gold_paths in the last 24h. "
+                "Run with --recover-empty-gold to re-process them.",
+                stuck_count,
+            )
 
     return 0 if errors == 0 else 1
 

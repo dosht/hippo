@@ -9,3 +9,5 @@
 
 ## Done
 
+- [x] MVP-2-06: Bug: extract.py semantic dedup silently drops all new gold entries (pipeline frozen since 2026-04-28)
+

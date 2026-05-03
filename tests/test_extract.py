@@ -8,16 +8,15 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from scripts.extract import (
-    DUPLICATE_THRESHOLD,
     EXTRACTION_MODEL,
     QMD_COLLECTION,
-    QMD_DUPLICATE_CHECK_N,
     _parse_entry_block,
     _parse_frontmatter,
     call_claude_extract,
     extract_session,
     is_duplicate,
     is_eligible,
+    is_recoverable,
     load_prompt,
     main,
     reindex_qmd,
@@ -525,103 +524,55 @@ Body.
 # ---------------------------------------------------------------------------
 
 class TestIsDuplicate:
-    def test_score_above_threshold_returns_true(self):
-        entry = _make_valid_entry_dict()
-        qmd_output = json.dumps([{"score": 0.92, "id": "mem-existing"}])
+    def test_no_collision_returns_false(self, tmp_path: Path):
+        """Entry with no matching .md file in gold_dir is not a duplicate."""
+        entry = _make_valid_entry_dict("mem-new-entry")
+        assert is_duplicate(entry, tmp_path) is False
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = qmd_output
-        mock_result.stderr = ""
+    def test_exact_id_collision_returns_true(self, tmp_path: Path):
+        """Entry whose id matches an existing .md file is a duplicate."""
+        entry = _make_valid_entry_dict("mem-existing-entry")
+        (tmp_path / "mem-existing-entry.md").write_text("existing", encoding="utf-8")
+        assert is_duplicate(entry, tmp_path) is True
 
-        with patch("scripts.extract.subprocess.run", return_value=mock_result):
-            assert is_duplicate(entry) is True
+    def test_topically_similar_different_id_not_duplicate(self, tmp_path: Path):
+        """Regression guard: topically similar entry with different id is NOT a duplicate.
 
-    def test_score_below_threshold_returns_false(self):
-        entry = _make_valid_entry_dict()
-        qmd_output = json.dumps([{"score": 0.70, "id": "mem-other"}])
+        This is the exact scenario that triggered the Apr 2026 silent gold-drop bug:
+        mem-clock-based-subscription-expiry was rejected because mem-billing-access-packages
+        scored 0.93 in the qmd reranker on a thin topic-only query. With exact-id collision
+        only, these entries are correctly treated as distinct.
+        """
+        (tmp_path / "mem-billing-access-packages-source-of-truth.md").write_text(
+            "billing content", encoding="utf-8"
+        )
+        entry = _make_valid_entry_dict("mem-clock-based-subscription-expiry")
+        entry["topics"] = ["billing", "subscriptions", "expiry"]
+        assert is_duplicate(entry, tmp_path) is False
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = qmd_output
-        mock_result.stderr = ""
+    def test_empty_gold_dir_never_duplicate(self, tmp_path: Path):
+        """No entries in an empty gold_dir can be duplicates."""
+        entry = _make_valid_entry_dict("mem-any-entry")
+        assert is_duplicate(entry, tmp_path) is False
 
-        with patch("scripts.extract.subprocess.run", return_value=mock_result):
-            assert is_duplicate(entry) is False
 
-    def test_score_equal_to_threshold_returns_true(self):
-        entry = _make_valid_entry_dict()
-        qmd_output = json.dumps([{"score": DUPLICATE_THRESHOLD, "id": "mem-exact"}])
+class TestIsRecoverable:
+    def test_gold_with_empty_gold_paths_is_recoverable(self):
+        entry = {"status": "gold", "gold_paths": []}
+        assert is_recoverable(entry) is True
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = qmd_output
-        mock_result.stderr = ""
+    def test_gold_with_non_empty_gold_paths_not_recoverable(self):
+        entry = {"status": "gold", "gold_paths": ["/some/path.md"]}
+        assert is_recoverable(entry) is False
 
-        with patch("scripts.extract.subprocess.run", return_value=mock_result):
-            assert is_duplicate(entry) is True
+    def test_silver_status_not_recoverable(self):
+        entry = {"status": "silver", "gold_paths": []}
+        assert is_recoverable(entry) is False
 
-    def test_qmd_failure_returns_false(self):
-        entry = _make_valid_entry_dict()
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        mock_result.stderr = "qmd error"
-
-        with patch("scripts.extract.subprocess.run", return_value=mock_result):
-            assert is_duplicate(entry) is False
-
-    def test_empty_output_returns_false(self):
-        entry = _make_valid_entry_dict()
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-
-        with patch("scripts.extract.subprocess.run", return_value=mock_result):
-            assert is_duplicate(entry) is False
-
-    def test_invalid_json_returns_false_with_warning(self, caplog):
-        entry = _make_valid_entry_dict()
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "not valid json"
-        mock_result.stderr = ""
-
-        import logging
-        with caplog.at_level(logging.WARNING):
-            with patch("scripts.extract.subprocess.run", return_value=mock_result):
-                result = is_duplicate(entry)
-
-        assert result is False
-        assert "Failed to parse" in caplog.text
-
-    def test_qmd_called_with_correct_args(self):
-        entry = _make_valid_entry_dict("mem-my-entry")
-        entry["topics"] = ["alpha", "beta"]
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "[]"
-        mock_result.stderr = ""
-
-        with patch("scripts.extract.subprocess.run", return_value=mock_result) as mock_run:
-            is_duplicate(entry)
-
-        cmd = mock_run.call_args[0][0]
-        assert "qmd" in cmd
-        assert "query" in cmd
-        assert "--collection" in cmd
-        assert QMD_COLLECTION in cmd
-        assert "--json" in cmd
-        assert "-n" in cmd
-        # Verify the query string contains both id and topics
-        query_arg = cmd[2]
-        assert "mem-my-entry" in query_arg
-        assert "alpha" in query_arg
+    def test_missing_gold_paths_not_recoverable(self):
+        """An entry without gold_paths at all is not a stuck gold entry."""
+        entry = {"status": "gold"}
+        assert is_recoverable(entry) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1432,3 +1383,209 @@ class TestExtractQuotaRecovery:
 
         # Only s1 was attempted; s2 was not processed after the quota stop.
         assert processed == ["s1"]
+
+
+# ---------------------------------------------------------------------------
+# AC2: --recover-empty-gold stuck session recovery
+# ---------------------------------------------------------------------------
+
+class TestRecoverEmptyGold:
+    def test_recover_flag_includes_stuck_gold_sessions(
+        self, silver_dir, gold_dir, prompt_path, tmp_manifest
+    ):
+        """--recover-empty-gold causes gold-status sessions with empty gold_paths
+        to be re-processed alongside silver sessions."""
+        import logging
+        from datetime import datetime, timezone
+
+        silver_file = _write_silver(silver_dir, "s-silver")
+        stuck_silver = _write_silver(silver_dir, "s-stuck")
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        entries = [
+            _make_entry(session_id="s-silver", silver_path=str(silver_file)),
+            _make_entry(
+                session_id="s-stuck",
+                silver_path=str(stuck_silver),
+                status="gold",
+                gold_paths=[],
+                extracted_at=now_iso,
+            ),
+        ]
+        _write_manifest(tmp_manifest, entries)
+
+        call_tracker = []
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            call_tracker.append(entry["session_id"])
+            return []
+
+        with patch("scripts.extract.extract_session", side_effect=fake_extract):
+            rc = main([
+                "--recover-empty-gold",
+                "--manifest", str(tmp_manifest),
+                "--gold-dir", str(gold_dir),
+                "--prompt", str(prompt_path),
+            ])
+
+        assert rc == 0
+        assert "s-silver" in call_tracker
+        assert "s-stuck" in call_tracker
+
+    def test_without_recover_flag_stuck_sessions_skipped(
+        self, silver_dir, gold_dir, prompt_path, tmp_manifest
+    ):
+        """Without --recover-empty-gold, gold-status sessions are not re-processed."""
+        from datetime import datetime, timezone
+
+        stuck_silver = _write_silver(silver_dir, "s-stuck")
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        entries = [
+            _make_entry(
+                session_id="s-stuck",
+                silver_path=str(stuck_silver),
+                status="gold",
+                gold_paths=[],
+                extracted_at=now_iso,
+            ),
+        ]
+        _write_manifest(tmp_manifest, entries)
+
+        call_tracker = []
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            call_tracker.append(entry["session_id"])
+            return []
+
+        with patch("scripts.extract.extract_session", side_effect=fake_extract):
+            rc = main([
+                "--manifest", str(tmp_manifest),
+                "--gold-dir", str(gold_dir),
+                "--prompt", str(prompt_path),
+            ])
+
+        assert rc == 0
+        assert call_tracker == []
+
+    def test_extract_session_writes_entry_when_no_id_collision(
+        self, silver_dir, gold_dir, tmp_manifest
+    ):
+        """After the fix, extract_session writes the entry when no .md collision exists.
+
+        This is the core regression test: previously is_duplicate() would false-positive
+        on a topic-similar entry. Now it checks only for exact id file collision.
+        """
+        silver_file = _write_silver(silver_dir, "sess-recover")
+        entry = _make_entry(session_id="sess-recover", silver_path=str(silver_file))
+        _write_manifest(tmp_manifest, [entry])
+
+        proposed = _make_valid_entry_dict("mem-clock-based-subscription-expiry")
+        proposed["topics"] = ["billing", "subscriptions", "expiry"]
+
+        # Simulate corpus has a topically related entry but different id.
+        gold_dir.mkdir(parents=True, exist_ok=True)
+        (gold_dir / "mem-billing-access-packages-source-of-truth.md").write_text(
+            "existing billing entry", encoding="utf-8"
+        )
+
+        with patch("scripts.extract.call_claude_extract", return_value=[proposed]):
+            written = extract_session(
+                entry=entry,
+                gold_dir=gold_dir,
+                manifest_path=tmp_manifest,
+                prompt="prompt",
+                dry_run=False,
+            )
+
+        # Entry must be written: different id, no collision.
+        assert len(written) == 1
+        assert (gold_dir / "mem-clock-based-subscription-expiry.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# AC4: monitoring warning for empty gold_paths
+# ---------------------------------------------------------------------------
+
+class TestMonitoringWarning:
+    def test_main_warns_on_empty_gold_paths_in_last_24h(
+        self, silver_dir, gold_dir, prompt_path, tmp_manifest, caplog
+    ):
+        """After a run that produces empty gold_paths, main() emits a WARNING.
+
+        Regression guard: the Apr 2026 regression went undetected for 4 days because
+        the pipeline reported success even when gold_paths was empty.
+        """
+        import logging
+        from datetime import datetime, timezone
+
+        # Session that extract_session marks as gold but with empty paths.
+        silver_file = _write_silver(silver_dir, "s-empty")
+        entry = _make_entry(session_id="s-empty", silver_path=str(silver_file))
+        _write_manifest(tmp_manifest, [entry])
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            # Simulate the pipeline writing gold status with empty gold_paths.
+            from scripts.manifest import update_manifest
+            from datetime import datetime, timezone
+            now_iso = datetime.now(tz=timezone.utc).isoformat()
+            update_manifest(
+                str(manifest_path),
+                entry["session_id"],
+                {"status": "gold", "extracted_at": now_iso, "gold_paths": [], "error": None},
+            )
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="scripts.extract"):
+            with patch("scripts.extract.extract_session", side_effect=fake_extract):
+                rc = main([
+                    "--manifest", str(tmp_manifest),
+                    "--gold-dir", str(gold_dir),
+                    "--prompt", str(prompt_path),
+                ])
+
+        assert rc == 0
+        warning_text = caplog.text
+        assert "empty gold_paths" in warning_text.lower() or "gold_paths" in warning_text
+
+    def test_main_no_warning_when_gold_paths_non_empty(
+        self, silver_dir, gold_dir, prompt_path, tmp_manifest, caplog
+    ):
+        """When all gold sessions have non-empty gold_paths, no warning is emitted."""
+        import logging
+        from datetime import datetime, timezone
+
+        silver_file = _write_silver(silver_dir, "s-ok")
+        entry = _make_entry(session_id="s-ok", silver_path=str(silver_file))
+        _write_manifest(tmp_manifest, [entry])
+
+        def fake_extract(entry, gold_dir, manifest_path, prompt, dry_run):
+            # Simulate successful extraction with written paths.
+            from scripts.manifest import update_manifest
+            from datetime import datetime, timezone
+            now_iso = datetime.now(tz=timezone.utc).isoformat()
+            update_manifest(
+                str(manifest_path),
+                entry["session_id"],
+                {
+                    "status": "gold",
+                    "extracted_at": now_iso,
+                    "gold_paths": ["/some/mem-ok.md"],
+                    "error": None,
+                },
+            )
+            return ["/some/mem-ok.md"]
+
+        with caplog.at_level(logging.WARNING, logger="scripts.extract"):
+            with patch("scripts.extract.extract_session", side_effect=fake_extract):
+                with patch("scripts.extract.reindex_qmd"):
+                    rc = main([
+                        "--manifest", str(tmp_manifest),
+                        "--gold-dir", str(gold_dir),
+                        "--prompt", str(prompt_path),
+                    ])
+
+        assert rc == 0
+        # No WARNING about empty gold_paths
+        for record in caplog.records:
+            if record.levelno == logging.WARNING:
+                assert "gold_paths" not in record.message.lower()

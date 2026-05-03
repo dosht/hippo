@@ -101,13 +101,14 @@ cross-machine real-time access becomes a requirement.
 ## Project Progress
 
 <!-- PROGRESS_START -->
-**Overall Progress:** [███████████████░░░░░] 75% (12/16 stories done)
-*Last updated: 2026-04-18*
+**Overall Progress:** [████████████████░░░░] 82% (18/22 stories done)
+*Last updated: 2026-05-03*
 
 ### Epic Progress
 
 | Epic ID | Epic Name | Progress | Stories |
 |---------|-----------|----------|---------|
-| MVP-1 | End-to-End Write-Path to Read-Path Loop | [███████████████░░░░░] 75% (12/16 stories done) | 12/16 |
+| MVP-1 | End-to-End Write-Path to Read-Path Loop | [████████████████████] 100% (16/16 stories done) | 16/16 |
+| MVP-2 | Quota Resilience and Cost Optimization | [██████░░░░░░░░░░░░░░] 33% (2/6 stories done) | 2/6 |
 
 <!-- PROGRESS_END -->
